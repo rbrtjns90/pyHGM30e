@@ -1,7 +1,7 @@
 # pyHGM30e
  A python implementation of Hegemony by Akos Ivanyi using original files
 
-The only requirement is pygame
+The only requirement is pygame. It's still a work in progress
 
 python3 game.py
 <img width="901" alt="Screenshot 2025-01-31 at 2 56 21 AM" src="https://github.com/user-attachments/assets/c0afc477-631e-4709-94fc-c09267e27372" />
