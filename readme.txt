@@ -13,7 +13,7 @@ www.angelfire.com/ego/akos
 
 -------------
 
-Hegemony 3.0.f was rewritten in Python which runs in a GUI
+Hegemony 3.0.f was rewritten in Python
 
 The old readme is left here to preserve the history of the game. 
 
