@@ -313,14 +313,60 @@ class Interface:
                     return "increase_tax"
                 return None
             
+            # Handle science screen controls
+            elif self.state.active_screen == "science":
+                # Science spending (1-6)
+                if event.unicode in "123456":
+                    return f"science {event.unicode}"
+                # Spy placement (player numbers)
+                elif (event.unicode.isdigit() and 
+                      int(event.unicode) in self.all_players and 
+                      int(event.unicode) != self.current_player.id):
+                    target_id = int(event.unicode)
+                    target = self.all_players[target_id]
+                    
+                    # Check if already spying
+                    if not self.current_player.science.spied_empires.get(target_id, False):
+                        spy_cost = self.current_player.get_spy_cost(target)
+                        if self.current_player.money >= spy_cost:
+                            return f"spy {target_id}"
+                        else:
+                            self.state.message = "Not enough gold to place spy"
+                    else:
+                        self.state.message = "Already spying on this empire"
+                return None
+            
             # Handle diplomacy screen controls
             elif self.state.active_screen == "diplomacy":
-                # Check for number keys 1-9 for declaring war
+                # Check for number keys 1-9 for diplomatic actions
                 if event.key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, 
                                pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
-                    target_id = int(event.unicode)
-                    if target_id != self.current_player.id:  # Can't declare war on yourself
-                        return f"declare_war_{target_id}"
+                    try:
+                        target_id = int(event.unicode)
+                        if target_id != self.current_player.id:  # Can't interact with yourself
+                            return f"set_negative_{target_id}"
+                    except ValueError:
+                        # If the unicode character isn't a valid number, ignore it
+                        pass
+                # Check for direct key presses for improving relations
+                elif event.unicode in ['o', 'p', '[', ']', 'l', "'", ',', '.', '/']:
+                    # Map each key to a specific nation
+                    key_to_nation = {
+                        'o': 1,
+                        'p': 2,
+                        '[': 3,
+                        ']': 4,
+                        'l': 5,
+                            "'": 6,
+                            ',': 7,
+                            '.': 8,
+                            '/': 9
+                        }
+                    target_id = key_to_nation.get(event.unicode)
+                    if target_id and target_id != self.current_player.id:  # Can't interact with yourself
+                        # Check if relations have already been changed this turn
+                        if not self.current_player.relations_changed.get(target_id, False):
+                            return f"improve_relations_{target_id}"
                 return None
             
             # If a game screen is active, only handle specific keys
@@ -598,16 +644,102 @@ class Interface:
             self.colors[15]
         )
         
+        # Basic info
         y = 50
         self.font.render_to(self.screen, (10, y), f"Empire: {player.name}", self.colors[7])
-        y += 30
-        self.font.render_to(self.screen, (10, y), f"Population: {player.population}", self.colors[7])
-        y += 30
-        self.font.render_to(self.screen, (10, y), f"Trust Level: {player.trust:.1f}", self.colors[7])
-        y += 30
-        self.font.render_to(self.screen, (10, y), f"Naval Capacity: {player.navy}", self.colors[7])
         y += 20
-        self.font.render_to(self.screen, (10, y), f"Embarked Units: {player.sea_army + player.sea_moved}", self.colors[7])
+        self.font.render_to(self.screen, (10, y), f"Trust Level: {player.trust:.1f}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (10, y), f"Tax Rate: {player.tax_rate:.1f}%", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (10, y), f"Morale: {player.morale:.2f}", self.colors[7])
+        
+        # Population breakdown
+        y += 30
+        self.title_font.render_to(self.screen, (10, y), "Population", self.colors[15])
+        y += 25
+        self.font.render_to(self.screen, (20, y), f"Total: {player.population}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (20, y), f"Peasants: {player.peasants}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (20, y), f"Fishers: {player.fishers}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (20, y), f"Workers: {player.workers}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (20, y), f"Merchants: {player.merchants}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (20, y), f"Unemployed: {player.unemployed}", self.colors[7])
+        
+        # Income breakdown
+        x = 300
+        y = 50
+        self.title_font.render_to(self.screen, (x, y), "Income", self.colors[15])
+        y += 25
+        
+        # Calculate income from each source
+        peasant_income = int(player.peasants * (player.tax_rate/100) * player.morale * player.science.agriculture * 4)
+        fisher_income = int(player.fishers * (player.tax_rate/100) * player.morale * player.science.sailing * 4)
+        worker_income = int(player.workers * (player.tax_rate/100) * player.morale * player.science.industry * 8)
+        merchant_income = int(player.merchants * (player.tax_rate/100) * player.morale * player.science.trade * 16)
+        
+        # Interest income/expense
+        interest = 0
+        if player.money > 0:
+            interest = int(player.money * 0.04)  # 4% interest on positive balance
+        else:
+            interest = -int(abs(player.money) * 0.12)  # 12% interest on debt
+        
+        self.font.render_to(self.screen, (x + 10, y), f"From Peasants: {peasant_income}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"From Fishers: {fisher_income}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"From Workers: {worker_income}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"From Merchants: {merchant_income}", self.colors[7])
+        y += 20
+        color = self.colors[10] if interest > 0 else self.colors[12]  # Green if positive, red if negative
+        self.font.render_to(self.screen, (x + 10, y), f"Interest: {interest}", color)
+        
+        # Expenses
+        y += 30
+        self.title_font.render_to(self.screen, (x, y), "Expenses", self.colors[15])
+        y += 25
+        
+        # Calculate maintenance costs
+        mill_cost = int(player.mills * player.science.industry * 20)
+        fort_cost = int(player.forts * 30)
+        church_cost = int(player.churches * 3)
+        university_cost = int(player.universities * 25)
+        navy_cost = int(player.navy * 20)
+        army_cost = int(player.soldiers * 30)
+        
+        self.font.render_to(self.screen, (x + 10, y), f"Mills: -{mill_cost}", self.colors[12])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"Forts: -{fort_cost}", self.colors[12])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"Churches: -{church_cost}", self.colors[12])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"Universities: -{university_cost}", self.colors[12])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"Navy: -{navy_cost}", self.colors[12])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"Army: -{army_cost}", self.colors[12])
+        
+        # Total income
+        y += 30
+        total_income = (peasant_income + fisher_income + worker_income + merchant_income + interest - 
+                       mill_cost - fort_cost - church_cost - university_cost - navy_cost - army_cost)
+        color = self.colors[10] if total_income > 0 else self.colors[12]  # Green if positive, red if negative
+        self.title_font.render_to(self.screen, (x, y), f"Total Income: {total_income}", color)
+        
+        # Military info
+        x = 600
+        y = 50
+        self.title_font.render_to(self.screen, (x, y), "Military", self.colors[15])
+        y += 25
+        self.font.render_to(self.screen, (x + 10, y), f"Naval Capacity: {player.navy}", self.colors[7])
+        y += 20
+        self.font.render_to(self.screen, (x + 10, y), f"Embarked Units: {player.sea_army + player.sea_moved}", self.colors[7])
         
         self.font.render_to(
             self.screen,
@@ -627,9 +759,12 @@ class Interface:
             self.colors[15]
         )
         
+        # Your empire's info
         y = 50
+        self.title_font.render_to(self.screen, (10, y), "Your Empire", self.colors[15])
+        y += 25
         self.font.render_to(self.screen, (10, y), f"Current Gold: {player.money}", self.colors[14])
-        y += 30
+        y += 20
         self.font.render_to(self.screen, (10, y), f"Tax Rate: {player.tax_rate:.1f}%", self.colors[7])
         y += 20
         self.font.render_to(self.screen, (10, y), "(Use Left/Right arrows to adjust)", self.colors[7])
@@ -638,8 +773,64 @@ class Interface:
         from player import PlayerManager
         pm = PlayerManager()
         projected_income = pm.calculate_income(player)
-        y += 30
+        y += 20
         self.font.render_to(self.screen, (10, y), f"Projected Income: {projected_income}", self.colors[14])
+        
+        # Other nations' info
+        y = 50
+        x = 300
+        self.title_font.render_to(self.screen, (x, y), "Other Nations", self.colors[15])
+        y += 25
+        
+        # Diplomatic status names and info levels
+        status_names = {
+            1: "War",
+            2: "Hostile",
+            3: "Neutral",
+            4: "Friendly",
+            5: "Allied"
+        }
+        
+        for other_player in self.all_players.values():
+            if other_player.id != player.id:
+                # Get diplomatic status
+                status = player.diplomatic_relations.get(other_player.id, 3)  # Default to Neutral
+                
+                # Draw nation name and status
+                self.font.render_to(
+                    self.screen,
+                    (x, y),
+                    f"{other_player.name} ({status_names[status]})",
+                    self.colors[other_player.id]
+                )
+                y += 20
+                
+                # Show info based on diplomatic status
+                if status >= 5:  # Allied - show everything
+                    self.font.render_to(self.screen, (x + 20, y), f"Gold: {other_player.money}", self.colors[7])
+                    y += 20
+                    self.font.render_to(self.screen, (x + 20, y), f"Tax Rate: {other_player.tax_rate:.1f}%", self.colors[7])
+                    y += 20
+                    income = pm.calculate_income(other_player)
+                    self.font.render_to(self.screen, (x + 20, y), f"Income: {income}", self.colors[7])
+                    y += 20
+                    self.font.render_to(self.screen, (x + 20, y), f"Population: {other_player.population}", self.colors[7])
+                    y += 20
+                elif status == 4:  # Friendly - show most info
+                    self.font.render_to(self.screen, (x + 20, y), f"Gold: {other_player.money}", self.colors[7])
+                    y += 20
+                    self.font.render_to(self.screen, (x + 20, y), f"Tax Rate: {other_player.tax_rate:.1f}%", self.colors[7])
+                    y += 20
+                    self.font.render_to(self.screen, (x + 20, y), f"Population: {other_player.population}", self.colors[7])
+                    y += 20
+                elif status == 3:  # Neutral - show basic info
+                    self.font.render_to(self.screen, (x + 20, y), f"Population: {other_player.population}", self.colors[7])
+                    y += 20
+                else:  # Hostile/War - show no info
+                    self.font.render_to(self.screen, (x + 20, y), "No information available", self.colors[8])
+                    y += 20
+                
+                y += 10  # Space between nations
         
         self.font.render_to(
             self.screen,
@@ -659,34 +850,142 @@ class Interface:
             self.colors[15]
         )
         
-        # Science level names
-        science_names = {
-            1: "Military",
-            2: "Economy",
-            3: "Culture",
-            4: "Navigation",
-            5: "Industry",
-            6: "Agriculture"
+        # Science branch names and keys
+        science_branches = {
+            1: ("Agriculture", "1"),
+            2: ("Industry", "2"),
+            3: ("Trade", "3"),
+            4: ("Sailing", "4"),
+            5: ("Military", "5"),
+            6: ("Medicine", "6")
         }
         
-        y = 50
+        # Draw current gold
+        self.font.render_to(
+            self.screen,
+            (10, 40),
+            f"Gold: {player.money}",
+            self.colors[14]
+        )
+        
+        # Draw science levels and spending options
+        y = 70
         for i in range(1, 7):
             level = player.science.get_level(i)
+            name, key = science_branches[i]
+            
+            # Calculate max spendable amount
+            max_spend = min(player.money, int((level ** 3) * 1000))
+            
+            # Draw level and spending info
             self.font.render_to(
                 self.screen,
                 (10, y),
-                f"{science_names[i]}: Level {level:.1f}",
+                f"{name}: Level {level:.1f}",
                 self.colors[7]
+            )
+            self.font.render_to(
+                self.screen,
+                (250, y),
+                f"Press {key} to spend (max: {max_spend})",
+                self.colors[14]
             )
             y += 30
         
+        # Draw relative science graph
+        graph_x = 500
+        graph_y = 70
+        graph_width = 350
+        graph_height = 200
+        
+        # Draw graph background
+        pygame.draw.rect(
+            self.screen,
+            self.colors[8],  # Dark gray
+            (graph_x, graph_y, graph_width, graph_height),
+            1
+        )
+        
+        # Get max science level across all visible players for scaling
+        max_level = 1.0
+        for p in self.all_players.values():
+            if player.can_view_science(p):
+                for i in range(1, 7):
+                    max_level = max(max_level, p.science.get_level(i))
+        
+        # Draw bars for each player
+        bar_width = graph_width / (len(self.all_players) * 6 + len(self.all_players) - 1)
+        x = graph_x + 5
+        
+        for p in self.all_players.values():
+            can_view = player.can_view_science(p)
+            for i in range(1, 7):
+                level = p.science.get_level(i) if can_view else 0
+                bar_height = (level / max_level) * (graph_height - 10)
+                
+                # Use black for non-visible science levels
+                color = self.colors[0] if not can_view else self.colors[p.id]
+                
+                pygame.draw.rect(
+                    self.screen,
+                    color,
+                    (x, graph_y + graph_height - bar_height - 5, bar_width - 2, bar_height)
+                )
+                x += bar_width
+            x += bar_width  # Add space between players
+        
+        # Draw legend with spy options
+        legend_y = graph_y + graph_height + 10
+        x = graph_x
+        for p in self.all_players.values():
+            if p.id != player.id:  # Don't show spy option for own empire
+                pygame.draw.rect(
+                    self.screen,
+                    self.colors[p.id],
+                    (x, legend_y, 20, 20)
+                )
+                
+                # Show spy status or cost
+                if player.science.spied_empires.get(p.id, False):
+                    spy_text = "Spying"
+                    text_color = self.colors[2]  # Green
+                else:
+                    spy_cost = player.get_spy_cost(p)
+                    spy_text = f"Spy ({spy_cost}g)"
+                    text_color = self.colors[14]  # Gold
+                
+                self.font.render_to(
+                    self.screen,
+                    (x + 25, legend_y + 5),
+                    f"{p.name} - {spy_text}",
+                    text_color
+                )
+                
+                # Add key hint for spying
+                if not player.science.spied_empires.get(p.id, False):
+                    self.font.render_to(
+                        self.screen,
+                        (x + 150, legend_y + 5),
+                        f"(Press {p.id} to spy)",
+                        self.colors[7]
+                    )
+                
+                x += 200
+        
+        # Instructions
+        self.font.render_to(
+            self.screen,
+            (10, self.screen_height - 40),
+            "Press 1-6 to spend on science",
+            self.colors[14]
+        )
         self.font.render_to(
             self.screen,
             (10, self.screen_height - 20),
-            "Press ESC to return",
+            "Press player number to place spy, ESC to return",
             self.colors[14]
         )
-
+    
     def draw_diplomacy_screen(self, player, all_players):
         """Draw diplomacy management screen"""
         self.screen.fill(self.colors[0])
@@ -722,19 +1021,36 @@ class Interface:
                 )
                 
                 # Draw options to change relations
-                if status > 1:  # Can only lower if not already at war
+                options = []
+                
+                # Option to decrease relations (declare war)
+                if status > 1:  # Can lower if not at war
                     self.font.render_to(
                         self.screen,
                         (300, y),
-                        f"Press {other_player.id} to declare war",
-                        self.colors[4]  # Red color for war option
+                        f"Press {other_player.id} to set negative relations",
+                        self.colors[4]  # Red color for negative option
                     )
+                
+                # Option to increase relations
+                if status < 5:  # Can increase if not already allied
+                    key_list = ["o","p","[","]","l","\\","l",".","/"]
+                if 1 <= other_player.id <= len(key_list):
+                    key = key_list[other_player.id - 1]
+                else:
+                    key = '?'
+                self.font.render_to(
+                    self.screen,
+                    (550, y),
+                    f"Press {key} to improve relations",
+                                        self.colors[2]  # Green color for improve option
+                                    )
                 y += 30
-        
+                                
         self.font.render_to(
             self.screen,
             (10, self.screen_height - 20),
-            "Press nation number to declare war, ESC to return",
+            "Press number to declare war, o p [ ] l ; ' , .  to improve relations (one change per nation per turn), ESC to return",
             self.colors[14]
         )
     

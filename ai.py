@@ -216,8 +216,7 @@ class AI:
         settings: AISettings,
         game_map: Dict[str, List[List[int]]]
     ):
-        """Handle military movement and spending"""
-        
+        """Make decisions about military spending and actions"""
         # Determine military spending ratio based on threats
         at_war = any(rel == 1 for rel in player.diplomatic_relations.values())
         military_ratio = (
@@ -235,7 +234,7 @@ class AI:
             # Build navy if coastal
             if self._has_coast(player, game_map):
                 navy_budget = int(military_budget * settings.navy_priority)
-                self._build_navy(player, navy_budget)
+                self._build_navy(player, navy_budget, game_map)
     
     def _defend_territories(
         self,
@@ -276,19 +275,45 @@ class AI:
                 if game_map["owner"][y][x] == player.id:
                     # Check adjacent tiles for sea
                     for dx, dy in [(0,1), (1,0), (0,-1), (-1,0)]:
-                        nx, ny = x + dx, y + dy
-                        if (0 <= nx < len(game_map["terrain"][0]) and 
-                            0 <= ny < len(game_map["terrain"]) and
-                            game_map["terrain"][ny][nx] == 0):
+                        new_x, new_y = x + dx, y + dy
+                        if (0 <= new_x < len(game_map["terrain"][0]) and 
+                            0 <= new_y < len(game_map["terrain"]) and
+                            game_map["terrain"][new_y][new_x] == 0):
                             return True
         return False
     
-    def _build_navy(self, player: Player, budget: int):
-        """Build naval forces with available budget"""
-        ships = budget // self.military_manager.NAVY_COST
-        if ships > 0:
-            player.navy += ships
-            player.money -= ships * self.military_manager.NAVY_COST
+    def _build_navy(self, player: Player, budget: int, game_map: Dict[str, List[List[int]]]):
+        """Build navy units based on needs"""
+        if budget <= 0:
+            return
+            
+        # Check if we have any armies waiting to embark
+        armies_to_embark = 0
+        for y in range(15):
+            for x in range(15):
+                if game_map["owner"][y][x] == player.id and game_map["army"][y][x] > 0:
+                    # Check adjacent tiles for sea
+                    for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                        new_x, new_y = x + dx, y + dy
+                        if (0 <= new_x < 15 and 0 <= new_y < 15 and 
+                            game_map["terrain"][new_y][new_x] == 0):  # Sea is terrain type 0
+                            armies_to_embark += game_map["army"][y][x]
+                            break
+        
+        # Build enough ships to transport armies
+        ships_needed = (armies_to_embark + 9) // 10  # Each ship can carry 10 armies
+        ships_possible = budget // self.military_manager.NAVY_COST
+        ships_to_build = min(ships_needed, ships_possible)
+        
+        # Find coastal territories to build navy in
+        for y in range(15):
+            for x in range(15):
+                if (game_map["owner"][y][x] == player.id and 
+                    game_map["terrain"][y][x] == 0 and  # Sea tile
+                    ships_to_build > 0):
+                    game_map["army"][y][x] += 1  # Navy units are stored in army layer
+                    ships_to_build -= 1
+                    player.money -= self.military_manager.NAVY_COST
     
     def _handle_construction(
         self,

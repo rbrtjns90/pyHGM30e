@@ -56,6 +56,7 @@ class Game:
                     player = self.player_manager.add_player(i, name, control)
                     
                     player.population = int(f.readline())
+                    player.distribute_population()
                     player.money = int(f.readline())
                     player.navy = int(f.readline())
                     player.sea_army = int(f.readline())
@@ -198,35 +199,52 @@ class Game:
         x = self.interface.state.selected_x
         y = self.interface.state.selected_y
         
+        # Split command into parts
+        parts = command.split()
+        cmd = parts[0]
+        
+        if cmd == "spy":
+            if len(parts) == 2:
+                target_id = int(parts[1])
+                target = self.player_manager.get_player(target_id)
+                if target:
+                    spy_cost = current_player.get_spy_cost(target)
+                    if current_player.money >= spy_cost:
+                        current_player.money -= spy_cost
+                        current_player.science.spied_empires[target_id] = True
+                        self.interface.state.message = f"Spy placed in {target.name}"
+                    else:
+                        self.interface.state.message = "Not enough gold to place spy"
+        
         # Handle game screen commands
-        if command == "info":
+        elif cmd == "info":
             self.interface.current_player = current_player
             self.interface.state.active_screen = "info"
-        elif command == "treasury":
+        elif cmd == "treasury":
             self.interface.current_player = current_player
             self.interface.state.active_screen = "treasury"
-        elif command == "decrease_tax":
+        elif cmd == "decrease_tax":
             if current_player.tax_rate >= 10:
                 current_player.tax_rate = max(0, current_player.tax_rate - 10)
                 self.interface.state.message = f"Tax rate decreased to {current_player.tax_rate:.1f}%"
                 # Update treasury screen to show new projected income
                 if self.interface.state.active_screen == "treasury":
                     self.interface.current_player = current_player
-        elif command == "increase_tax":
+        elif cmd == "increase_tax":
             if current_player.tax_rate <= 90:
                 current_player.tax_rate = min(100, current_player.tax_rate + 10)
                 self.interface.state.message = f"Tax rate increased to {current_player.tax_rate:.1f}%"
                 # Update treasury screen to show new projected income
                 if self.interface.state.active_screen == "treasury":
                     self.interface.current_player = current_player
-        elif command == "science":
+        elif cmd == "science":
             self.interface.current_player = current_player
             self.interface.state.active_screen = "science"
-        elif command == "diplomacy":
+        elif cmd == "diplomacy":
             self.interface.current_player = current_player
             self.interface.all_players = self.player_manager.players
             self.interface.state.active_screen = "diplomacy"
-        elif command == "help":
+        elif cmd == "help":
             self._display_help_file("how.hlp")
         # Handle other commands
         elif command == "end_turn" or command == "E":
@@ -247,14 +265,43 @@ class Game:
             self._handle_move_command(command[5:], current_player, x, y)
         elif command == "embark":
             self._handle_embark_command(current_player, x, y)
-        elif command.startswith("declare_war_"):
+        elif command.startswith("spend_science_"):
+            # Parse branch and amount from command (format: spend_science_1_1000)
+            _, _, branch, amount = command.split("_")
+            branch = int(branch)
+            amount = int(amount)
+            
+            # Spend money on science
+            progress = self.player_manager.spend_on_science(current_player, branch, amount)
+            if progress > 0:
+                branch_names = {
+                    1: "Agriculture",
+                    2: "Industry", 
+                    3: "Trade",
+                    4: "Sailing",
+                    5: "Military",
+                    6: "Medicine"
+                }
+                self.interface.state.message = f"Advanced {branch_names[branch]} by {progress:.2f} levels"
+            else:
+                self.interface.state.message = "Could not advance science"
+                
+        elif command.startswith("set_negative_"):
             target_id = int(command.split("_")[-1])
             target_player = self.player_manager.get_player(target_id)
             if target_player:
-                # Set diplomatic relations to war (1)
-                current_player.diplomatic_relations[target_id] = 1
-                target_player.diplomatic_relations[current_player.id] = 1
-                self.interface.state.message = f"War declared on {target_player.name}!"
+                # Set diplomatic relations to hostile (2)
+                current_player.diplomatic_relations[target_id] = 2
+                target_player.diplomatic_relations[current_player.id] = 2
+                self.interface.state.message = f"Relations with {target_player.name} set to hostile"
+        elif command.startswith("improve_relations_"):
+            target_id = int(command.split("_")[-1])
+            if self.player_manager.change_diplomatic_relation(current_player, target_id, 1):
+                target_player = self.player_manager.get_player(target_id)
+                if target_player:
+                    # Also improve relations for target player
+                    target_player.diplomatic_relations[current_player.id] = current_player.diplomatic_relations[target_id]
+                    self.interface.state.message = f"Relations improved with {target_player.name}"
     
     def _handle_embark_command(self, player: Player, x: int, y: int):
         """Handle army embarking and naval invasions"""
@@ -506,7 +553,10 @@ class Game:
             self.running = False
             return
             
-        # Reset moved units for all territories at start of next player's turn
+        # Reset state for next player's turn
+        self.player_manager.reset_diplomatic_changes(next_player)
+        
+        # Reset moved units for all territories
         for y in range(15):
             for x in range(15):
                 self.game_map["moved"][y][x] = 0
@@ -553,35 +603,157 @@ class Game:
             self.interface.state.message = "You don't own this territory"
             return
             
+        terrain_type = self.terrain_manager.get_terrain(self.game_map["terrain"][y][x])
+        terrain_name = terrain_type.name.lower()
+        
+        # Initialize cost
         cost = 0
+        
+        # Check terrain restrictions
         if building == "fort":
+            if terrain_name == "sea":
+                self.interface.state.message = "Cannot build fort on sea"
+                return
+            elif terrain_name == "swamp":
+                self.interface.state.message = "Cannot build fort in swamp"
+                return
             cost = self.military_manager.FORT_COST
-            if player.money >= cost:
-                self.game_map["fort"][y][x] += 1
+            if player.money < cost:
+                self.interface.state.message = f"Not enough gold (need {cost})"
+                return
+            self.game_map["fort"][y][x] += 1
+            player.money -= cost
+            self.interface.state.message = f"Built fort for {cost} gold"
+                
         elif building == "church":
+            if terrain_name == "sea":
+                self.interface.state.message = "Cannot build church on sea"
+                return
+            elif terrain_name == "mountain":
+                self.interface.state.message = "Cannot build church on mountain"
+                return
             cost = self.military_manager.CHURCH_COST
-            if player.money >= cost:
-                self.game_map["church"][y][x] += 1
+            if player.money < cost:
+                self.interface.state.message = f"Not enough gold (need {cost})"
+                return
+            self.game_map["church"][y][x] += 1
+            player.money -= cost
+            self.interface.state.message = f"Built church for {cost} gold"
+                
         elif building == "university":
+            if terrain_name == "sea":
+                self.interface.state.message = "Cannot build university on sea"
+                return
+            elif terrain_name in ["mountain", "swamp", "desert"]:
+                self.interface.state.message = f"Cannot build university on {terrain_name}"
+                return
             cost = self.military_manager.UNIVERSITY_COST
-            if player.money >= cost:
-                self.game_map["university"][y][x] += 1
+            if player.money < cost:
+                self.interface.state.message = f"Not enough gold (need {cost})"
+                return
+            self.game_map["university"][y][x] += 1
+            player.money -= cost
+            self.interface.state.message = f"Built university for {cost} gold"
+                
         elif building == "mill":
+            if terrain_name == "sea":
+                self.interface.state.message = "Cannot build mill on sea"
+                return
+            elif terrain_name in ["desert", "tundra"]:
+                self.interface.state.message = f"Cannot build mill on {terrain_name}"
+                return
             cost = self.military_manager.MILL_COST
-            if player.money >= cost:
-                self.game_map["mill"][y][x] += 1
+            if player.money < cost:
+                self.interface.state.message = f"Not enough gold (need {cost})"
+                return
+            self.game_map["mill"][y][x] += 1
+            player.money -= cost
+            self.interface.state.message = f"Built mill for {cost} gold"
+                
         elif building == "army":
+            if terrain_name == "sea":
+                self.interface.state.message = "Cannot recruit army on sea"
+                return
+                
             unit_size = [1, 2, 5, 10, 20, 50, 100][self.interface.state.code - 1]
             cost = self.military_manager.ARMY_COST * unit_size
-            if player.money >= cost:
-                self.game_map["army"][y][x] += unit_size
-        
-        if cost > 0:
-            if player.money >= cost:
-                player.money -= cost
-                self.interface.state.message = f"Built {building} for {cost} gold"
-            else:
-                self.interface.state.message = f"Not enough gold ({cost} needed)"
+            
+            if player.money < cost:
+                self.interface.state.message = f"Not enough gold (need {cost})"
+                return
+                
+            # Calculate total available population
+            total_available = (player.unemployed + player.peasants + 
+                            player.workers + player.merchants)
+            
+            if total_available < unit_size:
+                self.interface.state.message = f"Not enough population (need {unit_size}, have {total_available})"
+                return
+            
+            # Deduct population in priority order
+            remaining = unit_size
+            
+            # First use unemployed
+            if remaining > 0 and player.unemployed > 0:
+                used = min(remaining, player.unemployed)
+                player.unemployed -= used
+                remaining -= used
+            
+            # Then use peasants
+            if remaining > 0 and player.peasants > 0:
+                used = min(remaining, player.peasants)
+                player.peasants -= used
+                remaining -= used
+            
+            # Then use workers
+            if remaining > 0 and player.workers > 0:
+                used = min(remaining, player.workers)
+                player.workers -= used
+                remaining -= used
+            
+            # Finally use merchants
+            if remaining > 0 and player.merchants > 0:
+                used = min(remaining, player.merchants)
+                player.merchants -= used
+                remaining -= used
+            
+            self.game_map["army"][y][x] += unit_size
+            player.money -= cost
+            self.interface.state.message = f"Recruited army of {unit_size} for {cost} gold"
+            
+        elif building == "navy":
+            # Check if we're trying to build on a sea tile
+            if terrain_name != "sea":
+                self.interface.state.message = "Must build navy on sea tile"
+                return
+                
+            # Check if there's adjacent owned land
+            has_adjacent_land = False
+            for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+                new_x, new_y = x + dx, y + dy
+                if (0 <= new_x < 15 and 0 <= new_y < 15 and 
+                    self.game_map["owner"][new_y][new_x] == player.id and
+                    self.game_map["terrain"][new_y][new_x] != 0):  # Not sea
+                    has_adjacent_land = True
+                    break
+                    
+            if not has_adjacent_land:
+                self.interface.state.message = "Must build navy adjacent to owned land"
+                return
+                
+            unit_size = [1, 2, 5, 10, 20, 50, 100][self.interface.state.code - 1]
+            cost = self.military_manager.NAVY_COST * unit_size
+            
+            if player.money < cost:
+                self.interface.state.message = f"Not enough gold (need {cost})"
+                return
+                
+            player.navy += unit_size
+            player.money -= cost
+            self.interface.state.message = f"Built {unit_size} ships for {cost} gold"
+            
+        else:
+            self.interface.state.message = f"Unknown building type: {building}"
     
     def _handle_sell_command(self, building: str, player: Player, x: int, y: int):
         """Handle selling buildings and units"""

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 import random
 
@@ -11,27 +11,39 @@ class Science:
     military: float = 1.0
     medicine: float = 1.0
     
+    # Track which empires we are spying on
+    spied_empires: Dict[int, bool] = field(default_factory=dict)
+    
     def get_level(self, index: int) -> float:
         """Get science level by index"""
-        levels = [
-            self.agriculture,
-            self.industry,
-            self.trade,
-            self.sailing,
-            self.military,
-            self.medicine
-        ]
-        return levels[index - 1] if 1 <= index <= 6 else 1.0
+        if index == 1:
+            return self.agriculture
+        elif index == 2:
+            return self.industry
+        elif index == 3:
+            return self.trade
+        elif index == 4:
+            return self.sailing
+        elif index == 5:
+            return self.military
+        elif index == 6:
+            return self.medicine
+        return 0.0
     
     def set_level(self, index: int, value: float):
         """Set science level by index"""
-        if 1 <= index <= 6:
-            if index == 1: self.agriculture = value
-            elif index == 2: self.industry = value
-            elif index == 3: self.trade = value
-            elif index == 4: self.sailing = value
-            elif index == 5: self.military = value
-            elif index == 6: self.medicine = value
+        if index == 1:
+            self.agriculture = value
+        elif index == 2:
+            self.industry = value
+        elif index == 3:
+            self.trade = value
+        elif index == 4:
+            self.sailing = value
+        elif index == 5:
+            self.military = value
+        elif index == 6:
+            self.medicine = value
 
 @dataclass
 class Player:
@@ -53,7 +65,7 @@ class Player:
     sea_ratio: float = 0.0
     
     # Economy
-    tax_rate: float = 0.0
+    tax_rate: float = 10.0
     morale: float = 1.0
     trust: float = 1.0
     
@@ -75,6 +87,52 @@ class Player:
         self.science = Science()
         self.diplomatic_relations: Dict[int, int] = {}  # player_id -> relation level (1-5)
         self.diplomatic_actions: Dict[int, int] = {}  # player_id -> action (-1, 0, 1)
+        self.relations_changed: Dict[int, bool] = {}  # player_id -> whether relations changed this turn
+
+    def distribute_population(self):
+        """Distribute population among different working groups"""
+        if self.population > 0:
+            # Default distribution:
+            # 40% peasants (farming)
+            # 20% fishers (sea-based)
+            # 25% workers (industry)
+            # 10% merchants (trade)
+            # 5% unemployed
+            self.peasants = int(self.population * 0.4)
+            self.fishers = int(self.population * 0.2)
+            self.workers = int(self.population * 0.25)
+            self.merchants = int(self.population * 0.1)
+            # Any remaining population goes to unemployed
+            self.unemployed = (self.population - 
+                (self.peasants + self.fishers + 
+                 self.workers + self.merchants))
+
+    def can_view_science(self, other_player: 'Player') -> bool:
+        """Check if we can view another player's science levels"""
+        # Always can view our own science
+        if self.id == other_player.id:
+            return True
+            
+        # Check if we have a spy active
+        if self.science.spied_empires.get(other_player.id, False):
+            return True
+            
+        # Check diplomatic relations
+        relation_level = self.diplomatic_relations.get(other_player.id, 3)  # Default to neutral
+        return relation_level >= 4  # Can view if friendly or allied
+    
+    def get_spy_cost(self, other_player: 'Player') -> int:
+        """Calculate the cost to place a spy in another empire"""
+        relation_level = self.diplomatic_relations.get(other_player.id, 3)  # Default to neutral
+        
+        # Base cost is 1000
+        base_cost = 1000
+        
+        # Reduce cost based on relations
+        if relation_level >= 4:  # Friendly or allied
+            return int(base_cost * 0.2)  # 80% reduction
+        else:
+            return base_cost
 
 class PlayerManager:
     def __init__(self):
@@ -86,25 +144,8 @@ class PlayerManager:
         """Add a new player"""
         if id not in self.players and 1 <= id <= self.max_players:
             player = Player(id=id, name=name, control=control)
-            
-            # Initialize working population groups based on starting population
-            if player.population > 0:
-                # Default distribution:
-                # 40% peasants (farming)
-                # 20% fishers (sea-based)
-                # 25% workers (industry)
-                # 10% merchants (trade)
-                # 5% unemployed
-                player.peasants = int(player.population * 0.4)
-                player.fishers = int(player.population * 0.2)
-                player.workers = int(player.population * 0.25)
-                player.merchants = int(player.population * 0.1)
-                # Any remaining population goes to unemployed
-                player.unemployed = (player.population - 
-                    (player.peasants + player.fishers + 
-                     player.workers + player.merchants))
-            
             self.players[id] = player
+            player.distribute_population()
             return player
         return None
     
@@ -187,6 +228,35 @@ class PlayerManager:
             
         return income
     
+    def spend_on_science(self, player: Player, branch: int, amount: int) -> float:
+        """Spend money on science branch and return progress made
+        branch: 1-6 corresponding to science branches
+        amount: money to spend
+        Returns: progress made (0.0-0.3)"""
+        if amount <= 0 or player.money < amount:
+            return 0.0
+            
+        current_level = player.science.get_level(branch)
+        
+        # Calculate spending limit
+        limit = int((current_level ** 3) * 1000)
+        amount = min(amount, limit)
+        
+        # Calculate progress using formula from science.hlp:
+        # (spent money) / 10000 / ((sc. level) ^ 3) * (1 + univers. * 50 / popul.)
+        uni_factor = 1 + (player.universities / max(player.population, 1) * 50)
+        progress = (amount / 10000 / (current_level ** 3)) * uni_factor
+        
+        # Cap progress at 0.3
+        progress = min(progress, 0.3)
+        
+        # Apply the progress and deduct money
+        if progress > 0:
+            player.science.set_level(branch, current_level + progress)
+            player.money -= amount
+            
+        return progress
+
     def update_science(self, player: Player):
         """Update player's science levels"""
         for i in range(1, 7):
@@ -201,6 +271,30 @@ class PlayerManager:
                 progress = min(progress, 0.3)  # Cap progress at 0.3
                 
                 player.science.set_level(i, current_level + progress)
+    
+    def change_diplomatic_relation(self, player: Player, target_id: int, change: int) -> bool:
+        """Change diplomatic relation level with target player
+        change: -1 to decrease, 1 to increase
+        Returns: True if change was successful"""
+        if target_id not in self.players or target_id == player.id:
+            return False
+            
+        current_level = player.diplomatic_relations.get(target_id, 3)  # Default to Neutral
+        
+        # Can only change one level per turn
+        new_level = current_level + change
+        
+        # Ensure level stays within valid range (1-5)
+        if 1 <= new_level <= 5:
+            player.diplomatic_relations[target_id] = new_level
+            player.relations_changed[target_id] = True
+            return True
+            
+        return False
+        
+    def reset_diplomatic_changes(self, player: Player):
+        """Reset diplomatic changes tracking for a new turn"""
+        player.relations_changed.clear()
     
     def calculate_population_growth(self, player: Player, terrain_food_potential: float) -> int:
         """Calculate population growth for the turn"""
